@@ -1,41 +1,38 @@
 """
-Posts or updates the Sentinel review comment on a GitHub PR.
-Uses the gh CLI (pre-installed on all Actions runners, authenticated via GH_TOKEN).
-Idempotent: finds an existing sentinel-bot comment by marker and updates it,
-so re-runs don't spam the PR with multiple comments.
+Platform-agnostic dispatcher for posting/updating the Sentinel review comment.
+Detects GitHub Actions vs GitLab CI from environment variables and calls
+the right commenter. Each commenter reads its own env vars.
 """
 
-import json
-import subprocess
-
-_MARKER = "<!-- sentinel-bot -->"
+import os
 
 
-def _gh(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["gh", *args], capture_output=True, text=True, check=True)
+def _detect_platform() -> str:
+    """
+    Returns 'github', 'gitlab', or raises RuntimeError.
+    Honours explicit SENTINEL_PLATFORM override first, then auto-detects from
+    the CI-provided env vars.
+    """
+    override = os.environ.get("SENTINEL_PLATFORM", "").lower().strip()
+    if override in ("github", "gitlab"):
+        return override
 
+    if os.environ.get("GITLAB_CI"):
+        return "gitlab"
+    if os.environ.get("GITHUB_ACTIONS"):
+        return "github"
 
-def post_or_update_comment(repo: str, pr_number: str, body: str) -> None:
-    # Find existing sentinel-bot comment ID
-    result = _gh(
-        "api",
-        f"/repos/{repo}/issues/{pr_number}/comments",
-        "--jq",
-        f'[.[] | select(.body | contains("{_MARKER}"))] | first | .id',
+    raise RuntimeError(
+        "Cannot detect CI platform. Set SENTINEL_PLATFORM=github|gitlab "
+        "or run from GitHub Actions / GitLab CI."
     )
-    comment_id = result.stdout.strip()
 
-    if comment_id and comment_id != "null":
-        _gh(
-            "api", "--method", "PATCH",
-            f"/repos/{repo}/issues/comments/{comment_id}",
-            "--field", f"body={body}",
-        )
-        print(f"Updated existing Sentinel comment #{comment_id}")
+
+def post_or_update_comment(body: str) -> None:
+    platform = _detect_platform()
+    if platform == "gitlab":
+        from bot.gitlab_commenter import post_or_update_gitlab_note
+        post_or_update_gitlab_note(body)
     else:
-        _gh(
-            "pr", "comment", pr_number,
-            "--repo", repo,
-            "--body", body,
-        )
-        print("Posted new Sentinel comment")
+        from bot.github_commenter import post_or_update_github_comment
+        post_or_update_github_comment(body)

@@ -1,6 +1,6 @@
 # 🛡️ Sentinel Bot
 
-An AI-powered pull request reviewer for GitHub. Sentinel runs on every PR, analyses the diff with a dual data-engineer + application-security persona, and posts a single, structured review comment explaining **what's wrong, why it matters, and how to fix it**.
+An AI-powered pull/merge request reviewer for **GitHub and GitLab** (including on-prem GitLab). Sentinel runs on every PR/MR, analyses the diff with a dual data-engineer + application-security persona, and posts a single, structured review comment explaining **what's wrong, why it matters, and how to fix it**.
 
 Sentinel is the delivery layer — the actual review logic lives in [`code-review-agent`](https://github.com/gideonler/code-review-agent).
 
@@ -44,12 +44,11 @@ Only changed files are reviewed. The comment is updated in place on every push (
 
 ---
 
-## Setup — adding Sentinel to a repo
+## Setup — GitHub
 
-Copy `.github/workflows/pr-review.yml` into any repo you want reviewed. Then configure these on the repo:
+Copy `.github/workflows/pr-review.yml` into any repo you want reviewed. Then configure:
 
-### Required secrets
-`Settings → Secrets and variables → Actions → New repository secret`
+### Required secret (Settings → Secrets and variables → Actions)
 
 Add **one** provider key (whichever you'll use):
 
@@ -59,16 +58,52 @@ Add **one** provider key (whichever you'll use):
 | `GEMINI_API_KEY` | Google Gemini |
 | `GROQ_API_KEY` | Groq (fast, free tier available) |
 
-`GITHUB_TOKEN` is auto-provided by Actions — no setup needed.
+`GITHUB_TOKEN` is auto-provided — no setup needed.
 
-### Optional variable
-`Settings → Secrets and variables → Actions → Variables tab`
+### Optional variable (Variables tab)
 
 | Variable | Default | Values |
 |---|---|---|
 | `SENTINEL_PROVIDER` | `anthropic` | `anthropic` / `gemini` / `groq` |
 
 That's it. Open a PR — the bot runs automatically.
+
+---
+
+## Setup — GitLab (incl. on-prem / air-gapped-with-proxy)
+
+Copy `.gitlab-ci.yml` from this repo into the target project (or include it in your existing pipeline). Then configure under **Settings → CI/CD → Variables**:
+
+### Required
+
+| Variable | Purpose | Notes |
+|---|---|---|
+| `GITLAB_TOKEN` | Posts MR notes | **Project Access Token** with `api` scope. Mark as *Masked*. `CI_JOB_TOKEN` cannot post MR notes by default, so this is required. |
+| *One* of `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `GROQ_API_KEY` | LLM auth | Mark as *Masked*. |
+
+### Optional
+
+| Variable | Default | Notes |
+|---|---|---|
+| `SENTINEL_PROVIDER` | `anthropic` | `anthropic` / `gemini` / `groq` |
+| `SENTINEL_BOT_REPO` | `https://github.com/gideonler/sentinel-bot.git` | Override to your internal mirror if air-gapped from github.com |
+| `SENTINEL_AGENT_REPO` | `https://github.com/gideonler/code-review-agent.git` | Same |
+
+### Behind an HTTP proxy (HPC / corporate networks)
+
+If your runners reach LLM APIs through a corporate proxy, set the proxy env vars **at the runner level** (`/etc/gitlab-runner/config.toml`) OR as CI/CD variables:
+
+```
+HTTPS_PROXY   http://proxy.internal:8080
+HTTP_PROXY    http://proxy.internal:8080
+NO_PROXY      gitlab.company.com,localhost,127.0.0.1
+```
+
+`NO_PROXY` **must** include your GitLab hostname — otherwise MR-note POSTs back to GitLab route through the external proxy and fail. Both the LLM SDK and the bot's `urllib` GitLab calls honour these vars automatically.
+
+### Air-gapped runners
+
+If the runners can't reach github.com (where sentinel-bot + code-review-agent are hosted), mirror both repos to your on-prem GitLab and set `SENTINEL_BOT_REPO` / `SENTINEL_AGENT_REPO` to point at the mirrors. No code changes needed.
 
 ---
 
@@ -98,10 +133,13 @@ That's it. Open a PR — the bot runs automatically.
 ```
 sentinel-bot/
 ├── .github/workflows/pr-review.yml  # GitHub Actions trigger
-├── review.py                        # Entrypoint — orchestrates the review
+├── .gitlab-ci.yml                   # GitLab CI trigger
+├── review.py                        # Entrypoint — detects CI platform
 ├── bot/
-│   ├── formatter.py                 # ReviewResult → GitHub markdown
-│   └── commenter.py                 # Idempotent post/update via gh CLI
+│   ├── formatter.py                 # ReviewResult → markdown comment
+│   ├── commenter.py                 # Dispatcher (GitHub vs GitLab)
+│   ├── github_commenter.py          # Posts via `gh` CLI
+│   └── gitlab_commenter.py          # Posts via REST v4 (urllib, no deps)
 └── requirements.txt                 # Near-empty — agent brings its own deps
 ```
 

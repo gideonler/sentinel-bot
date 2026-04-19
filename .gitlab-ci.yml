@@ -1,0 +1,56 @@
+#
+# Sentinel PR Review — GitLab CI template
+# ---------------------------------------------------------------
+# Copy this file into the target repo as `.gitlab-ci.yml` (or include it
+# alongside an existing pipeline). Runs on every MR event, posts a single
+# idempotent review note.
+#
+# Required CI/CD variables (Settings → CI/CD → Variables):
+#   GITLAB_TOKEN        Project Access Token with "api" scope. Masked.
+#                       CI_JOB_TOKEN CAN'T post MR notes by default, so
+#                       this token is required.
+#   One of:
+#     ANTHROPIC_API_KEY
+#     GEMINI_API_KEY
+#     GROQ_API_KEY
+#
+# Optional:
+#   SENTINEL_PROVIDER   anthropic | gemini | groq (default: anthropic)
+#   HTTPS_PROXY / HTTP_PROXY
+#                       Set at the runner level OR as CI variables if the
+#                       runner reaches LLM APIs through a corporate proxy.
+#                       NO_PROXY should include your GitLab hostname so
+#                       API calls back to GitLab bypass the proxy.
+#
+
+stages:
+  - review
+
+sentinel-review:
+  stage: review
+  image: python:3.11-slim
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  variables:
+    GIT_DEPTH: 0                                  # full history — needed for diff
+    # Proxy env vars are inherited from the runner / CI variables; listing
+    # them here so users know which ones matter:
+    # HTTPS_PROXY: "http://proxy.internal:8080"
+    # HTTP_PROXY:  "http://proxy.internal:8080"
+    # NO_PROXY:    "gitlab.company.com,localhost,127.0.0.1"
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends git ca-certificates
+    # Clone the bot + agent. Use CI_SERVER_URL so this works on any self-hosted
+    # instance without hardcoding a domain. Change the paths below to match
+    # where you mirror these repos on your on-prem GitLab.
+    - git clone --depth 1 "${SENTINEL_BOT_REPO:-https://github.com/gideonler/sentinel-bot.git}" sentinel-bot
+    - git clone --depth 1 "${SENTINEL_AGENT_REPO:-https://github.com/gideonler/code-review-agent.git}" code-review-agent
+    - pip install --quiet -e ./code-review-agent
+    # Install the optional provider extras only if needed (saves time on MRs
+    # that never touch the SDK). The agent pulls anthropic by default.
+    - if [ "$SENTINEL_PROVIDER" = "gemini" ]; then pip install --quiet "google-genai>=1.0.0"; fi
+    - if [ "$SENTINEL_PROVIDER" = "groq" ];   then pip install --quiet "groq>=0.9.0"; fi
+    # Fetch the target branch so `git diff origin/<target>` resolves.
+    - git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+  script:
+    - python sentinel-bot/review.py
