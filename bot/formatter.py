@@ -4,7 +4,7 @@ Uses <details> blocks for collapsible finding groups.
 """
 
 from agent.parser import ReviewResult, Severity, Verdict
-import io
+
 _VERDICT_BANNER = {
     Verdict.BLOCK: (
         "## 🔴 Sentinel Review — BLOCKED\n"
