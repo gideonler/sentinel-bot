@@ -42,7 +42,6 @@ if errors:
     print(f"Missing required environment variables: {', '.join(errors)}", file=sys.stderr)
     sys.exit(1)
 
-print(f"Sentinel: provider={provider}  diff={base_ref}  repo={repo}  PR=#{pr_number}")
 
 review_text, _ = review_target(
     str(Path.cwd()),
